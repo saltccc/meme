@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import json
-import mimetypes
 import os
 import re
 from pathlib import Path
@@ -10,7 +8,6 @@ from typing import Any
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ImageContent, TextContent
 from starlette.middleware.wsgi import WSGIMiddleware
 
 from admin import app as admin_app
@@ -18,6 +15,13 @@ from admin import app as admin_app
 ROOT = Path(__file__).resolve().parent
 STICKER_DIR = ROOT / "stickers"
 METADATA_PATH = ROOT / "metadata.json"
+
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "saltccc/meme")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+STICKER_CDN_BASE = os.environ.get(
+    "STICKER_CDN_BASE",
+    f"https://cdn.jsdelivr.net/gh/{GITHUB_REPO}@{GITHUB_BRANCH}/stickers",
+).rstrip("/")
 
 SYNONYMS = {
     "无语": ["没招", "雷人", "听不懂", "问号", "没办法", "流汗"],
@@ -102,11 +106,9 @@ def _text_summary(item: dict[str, Any]) -> str:
     return f"表情 {item['id']}：{item.get('caption','')}\n语气：{item.get('tone','')}\n标签：{'、'.join(item.get('tags', []))}"
 
 
-def _image_content(item: dict[str, Any]) -> ImageContent:
-    path = STICKER_DIR / item["file"]
-    data = base64.b64encode(path.read_bytes()).decode("ascii")
-    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return ImageContent(type="image", data=data, mimeType=mime)
+def _sticker_url(item: dict[str, Any]) -> str:
+    """Return a stable public CDN URL for the sticker stored in GitHub."""
+    return f"{STICKER_CDN_BASE}/{item['file']}"
 
 
 mcp = FastMCP(
@@ -129,21 +131,21 @@ def search_stickers(intent: str, limit: int = 5) -> str:
 
 
 @mcp.tool()
-def pick_sticker(intent: str) -> list[TextContent | ImageContent]:
-    """根据自然语言语气直接挑一张最合适的表情并返回图片。"""
+def pick_sticker(intent: str) -> str:
+    """根据自然语言语气挑一张最合适的表情，并返回公开图片 URL。"""
     item = _rank(intent, 1)[0]
-    return [TextContent(type="text", text=_text_summary(item)), _image_content(item)]
+    return f"{_text_summary(item)}\n图片URL：{_sticker_url(item)}"
 
 
 @mcp.tool()
-def send_sticker(sticker_id: str) -> list[TextContent | ImageContent]:
-    """按三位 ID 返回指定表情图片，例如 015、020、027。"""
+def send_sticker(sticker_id: str) -> str:
+    """按三位 ID 返回指定表情的公开图片 URL，例如 015、020、027。"""
     sid = str(sticker_id).strip().zfill(3)
     by_id = _by_id()
     item = by_id.get(sid)
     if not item:
-        return [TextContent(type="text", text=f"没有表情 {sid}。有效 ID：{', '.join(sorted(by_id))}")]
-    return [TextContent(type="text", text=_text_summary(item)), _image_content(item)]
+        return f"没有表情 {sid}。有效 ID：{', '.join(sorted(by_id))}"
+    return f"{_text_summary(item)}\n图片URL：{_sticker_url(item)}"
 
 
 # One public Render port serves BOTH:
