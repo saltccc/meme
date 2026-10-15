@@ -133,12 +133,10 @@ label{font-size:13px;color:#555;display:block;margin-top:7px}
 </style><div class=wrap>
 <h1>Salt Stickers</h1>
 {% with ms=get_flashed_messages() %}{% for m in ms %}<div class=msg>{{m}}</div>{% endfor %}{% endwith %}
-<div class=add><h3>新增表情包</h3><form method=post action="{{url_for('add')}}" enctype=multipart/form-data>
-<input type=file name=image accept="image/*" required>
-<input name=id placeholder="ID，例如 029" required>
-<label>描述内容</label><textarea name=description placeholder="这张图表达什么、适合什么时候发"></textarea>
-<label>标签</label><input name=tags placeholder="无语, 流汗, 尴尬, 被整不会了">
-<button>上传并提交</button></form></div>
+<div class=add><h3>批量新增表情包</h3><form method=post action="{{url_for('add')}}" enctype=multipart/form-data>
+<input type=file name=images accept="image/*" multiple required>
+<small>可以一次选很多张。系统会自动接着现有编号分配 ID，并标记为“待小机识别”。</small>
+<button>批量上传</button></form></div>
 <form method=post action="{{url_for('save_all')}}" id="all-stickers"><div class=savebar><button type=submit>保存修改</button></div><div class=grid>{% for s in stickers %}<div class=card>
 <img src="{{url_for('sticker_file',filename=s.fn)}}"><small>ID {{s.id}} · {{s.fn}}</small>
 <input type=hidden name="sid" value="{{s.id}}">
@@ -207,23 +205,45 @@ def edit(sid):
 @app.post("/admin/add")
 def add():
     if not authed(): return redirect(url_for("login"))
-    f=request.files.get("image"); sid=request.form.get("id","").strip().zfill(3)
-    if not f or not sid: flash("图片和 ID 都要填"); return redirect(url_for("admin"))
+    files=[f for f in request.files.getlist("images") if f and f.filename]
+    if not files:
+        flash("至少选择一张图片")
+        return redirect(url_for("admin"))
     meta=load_meta()
-    if find(meta,sid): flash("这个 ID 已存在"); return redirect(url_for("admin"))
-    ext=os.path.splitext(f.filename or "")[1].lower() or ".jpg"
-    fn=f"{sid}{ext}"; raw=f.read()
-    item={"id":sid,"file":fn,"caption":request.form.get("description","").strip()[:40],
-          "tone":request.form.get("description","").strip(),
-          "tags":[x.strip() for x in re.split(r"[,，]",request.form.get("tags","")) if x.strip()]}
-    sticker_list(meta).append(item)
+    used={int(get_id(x)) for x in sticker_list(meta) if get_id(x).isdigit()}
+    next_id=max(used, default=0)+1
+    added=[]
     os.makedirs(STICKERS,exist_ok=True)
-    with open(os.path.join(STICKERS,fn),"wb") as g:g.write(raw)
-    if GITHUB_TOKEN and GITHUB_REPO:
-        r=gh_put(f"stickers/{fn}",raw,f"Add sticker {sid}")
-        if r.status_code not in (200,201): flash("GitHub 图片上传失败"); return redirect(url_for("admin"))
-    _,msg=save_meta(meta,f"Register sticker {sid}"); flash(msg)
+    for f in files:
+        while next_id in used:
+            next_id += 1
+        sid=str(next_id).zfill(3)
+        ext=os.path.splitext(f.filename or "")[1].lower() or ".jpg"
+        fn=f"{sid}{ext}"
+        raw=f.read()
+        with open(os.path.join(STICKERS,fn),"wb") as g:
+            g.write(raw)
+        if GITHUB_TOKEN and GITHUB_REPO:
+            r=gh_put(f"stickers/{fn}",raw,f"Add sticker {sid}")
+            if r.status_code not in (200,201):
+                flash(f"{sid} 图片上传 GitHub 失败，已停止")
+                break
+        sticker_list(meta).append({
+            "id":sid,
+            "file":fn,
+            "caption":"",
+            "tone":"",
+            "tags":[],
+            "pending_review":True,
+        })
+        added.append(sid)
+        used.add(next_id)
+        next_id += 1
+    if added:
+        ok,msg=save_meta(meta,f"Register {len(added)} sticker(s) for review")
+        flash(f"已批量添加 {len(added)} 张（{added[0]}–{added[-1]}），等待小机识别。{msg if not ok else ''}")
     return redirect(url_for("admin"))
+
 
 @app.post("/admin/delete/<sid>")
 def delete(sid):
