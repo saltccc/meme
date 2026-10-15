@@ -123,7 +123,7 @@ PAGE = """<!doctype html><meta name=viewport content="width=device-width,initial
 <title>Salt Stickers</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:18px;background:#fafafa;color:#222}
-.wrap{max-width:1000px;margin:auto}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.wrap{max-width:1000px;margin:auto}.savebar{position:sticky;top:10px;z-index:20;display:flex;justify-content:flex-end;margin:0 0 14px;pointer-events:none}.savebar button{pointer-events:auto;padding:11px 20px;box-shadow:0 4px 18px #0002}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
 .card,.add{background:#fff;border:1px solid #ddd;border-radius:14px;padding:12px}.add{margin-bottom:18px}
 .card img{width:100%;height:180px;object-fit:contain;background:#f4f4f4;border-radius:10px}
 input,textarea,button{font:inherit;box-sizing:border-box}input,textarea{width:100%;padding:9px;margin:5px 0}textarea{min-height:88px}
@@ -139,14 +139,13 @@ label{font-size:13px;color:#555;display:block;margin-top:7px}
 <label>描述内容</label><textarea name=description placeholder="这张图表达什么、适合什么时候发"></textarea>
 <label>标签</label><input name=tags placeholder="无语, 流汗, 尴尬, 被整不会了">
 <button>上传并提交</button></form></div>
-<div class=grid>{% for s in stickers %}<div class=card>
+<form method=post action="{{url_for('save_all')}}" id="all-stickers"><div class=savebar><button type=submit>保存修改</button></div><div class=grid>{% for s in stickers %}<div class=card>
 <img src="{{url_for('sticker_file',filename=s.fn)}}"><small>ID {{s.id}} · {{s.fn}}</small>
-<form method=post action="{{url_for('edit',sid=s.id)}}">
-<label>描述内容</label><textarea name=description>{{s.description}}</textarea>
-<label>标签</label><input name=tags value="{{s.tags}}">
-<button>保存修改</button></form>
-<form method=post action="{{url_for('delete',sid=s.id)}}" onsubmit="return confirm('确定删除？')"><button class=danger>删除</button></form>
-</div>{% endfor %}</div></div>"""
+<input type=hidden name="sid" value="{{s.id}}">
+<label>描述内容</label><textarea name="description_{{s.id}}">{{s.description}}</textarea>
+<label>标签</label><input name="tags_{{s.id}}" value="{{s.tags}}">
+<button class=danger type=submit formaction="{{url_for('delete',sid=s.id)}}" formmethod=post onclick="return confirm('确定删除？')">删除</button>
+</div>{% endfor %}</div></form></div>"""
 
 @app.route("/admin/login", methods=["GET","POST"])
 def login():
@@ -171,6 +170,29 @@ def sticker_file(filename):
 def find(meta, sid):
     sid=str(sid).zfill(3)
     return next((x for x in sticker_list(meta) if get_id(x)==sid),None)
+
+@app.post("/admin/save-all")
+def save_all():
+    if not authed(): return redirect(url_for("login"))
+    meta=load_meta()
+    changed=0
+    for sid in request.form.getlist("sid"):
+        item=find(meta,sid)
+        if not item:
+            continue
+        description=request.form.get(f"description_{sid}","").strip()
+        tags=request.form.get(f"tags_{sid}","")
+        if description != get_description(item) or tags != get_tags(item):
+            set_description(item,description)
+            set_tags(item,tags)
+            changed += 1
+    if changed:
+        ok,msg=save_meta(meta,f"Update {changed} sticker(s)")
+        flash(msg if ok else msg)
+    else:
+        flash("没有需要保存的修改")
+    return redirect(url_for("admin"))
+
 
 @app.post("/admin/edit/<sid>")
 def edit(sid):
