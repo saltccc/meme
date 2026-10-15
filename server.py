@@ -118,26 +118,11 @@ APP_MIME = "text/html;profile=mcp-app"
 WIDGET_URI = "ui://salt-stickers/test-v1.html"
 
 @mcp.resource(WIDGET_URI, mime_type=APP_MIME)
-def sticker_widget() -> dict[str, Any]:
-    html = (ROOT / "sticker-widget.html").read_text(encoding="utf-8")
-    return {
-        "contents": [{
-            "uri": WIDGET_URI,
-            "mimeType": APP_MIME,
-            "text": html,
-            "_meta": {
-                "ui": {
-                    "prefersBorder": False,
-                    "csp": {
-                        "connectDomains": [],
-                        "resourceDomains": ["https://cdn.jsdelivr.net"],
-                        "frameDomains": [],
-                    },
-                },
-                "openai/widgetDescription": "Displays one sticker image.",
-            },
-        }]
-    }
+def sticker_widget() -> str:
+    # FastMCP's resource decorator builds the MCP contents envelope itself.
+    # Returning an envelope here double-wraps it and makes ChatGPT display JSON
+    # as text instead of mounting the HTML widget.
+    return (ROOT / "sticker-widget.html").read_text(encoding="utf-8")
 
 @mcp.tool(
     name="show_test_sticker",
