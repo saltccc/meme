@@ -111,6 +111,10 @@ def _sticker_url(item: dict[str, Any]) -> str:
     return f"{STICKER_CDN_BASE}/{item['file']}"
 
 
+APP_MIME = "text/html;profile=mcp-app"
+WIDGET_URI = "ui://salt-stickers/meme-sticker-v1.html"
+
+
 mcp = FastMCP(
     "Salt Stickers",
     instructions=(
@@ -137,15 +141,34 @@ def pick_sticker(intent: str) -> str:
     return f"{_text_summary(item)}\n图片URL：{_sticker_url(item)}"
 
 
-@mcp.tool()
-def send_sticker(sticker_id: str) -> str:
-    """按三位 ID 返回指定表情的公开图片 URL，例如 015、020、027。"""
+@mcp.resource(WIDGET_URI, mime_type=APP_MIME)
+def sticker_widget() -> str:
+    return (ROOT / "sticker-widget.html").read_text(encoding="utf-8")
+
+
+@mcp.tool(
+    name="send_sticker",
+    description="按三位 ID 显示指定表情，例如 015、020、027。",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+    meta={
+        "ui": {"resourceUri": WIDGET_URI},
+        "openai/outputTemplate": WIDGET_URI,
+        "openai/visibility": ["model", "app"],
+    },
+)
+def send_sticker(sticker_id: str) -> dict[str, Any]:
     sid = str(sticker_id).strip().zfill(3)
     by_id = _by_id()
     item = by_id.get(sid)
     if not item:
-        return f"没有表情 {sid}。有效 ID：{', '.join(sorted(by_id))}"
-    return f"{_text_summary(item)}\n图片URL：{_sticker_url(item)}"
+        return {
+            "structuredContent": {"error": f"没有表情 {sid}"},
+            "content": [{"type": "text", "text": f"没有表情 {sid}。有效 ID：{', '.join(sorted(by_id))}"}],
+        }
+    return {
+        "structuredContent": {"imageUrl": _sticker_url(item)},
+        "content": [{"type": "text", "text": ""}],
+    }
 
 
 # One public Render port serves BOTH:
