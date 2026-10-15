@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: salt-stickers-mcp
+    env: docker
+    plan: free
+    autoDeploy: true
