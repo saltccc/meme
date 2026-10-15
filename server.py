@@ -41,19 +41,15 @@ SYNONYMS = {
     "工作": ["电脑", "上班", "加班", "打字"],
 }
 
-
 def _load() -> list[dict[str, Any]]:
     with METADATA_PATH.open("r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def _by_id() -> dict[str, dict[str, Any]]:
     return {str(x["id"]).zfill(3): x for x in _load()}
 
-
 def _norm(text: str) -> str:
     return re.sub(r"\s+", "", (text or "").lower())
-
 
 def _expanded_terms(query: str) -> set[str]:
     q = _norm(query)
@@ -66,7 +62,6 @@ def _expanded_terms(query: str) -> set[str]:
             terms.add(key)
             terms.update(values)
     return {t for t in terms if t}
-
 
 def _score(item: dict[str, Any], query: str) -> float:
     q = _norm(query)
@@ -89,7 +84,6 @@ def _score(item: dict[str, Any], query: str) -> float:
             score += 1.2
     return score
 
-
 def _rank(query: str, limit: int = 5) -> list[dict[str, Any]]:
     stickers = _load()
     by_id = {str(x["id"]).zfill(3): x for x in stickers}
@@ -101,15 +95,11 @@ def _rank(query: str, limit: int = 5) -> list[dict[str, Any]]:
         positives = [by_id[x] for x in fallback if x in by_id]
     return positives[:limit]
 
-
 def _text_summary(item: dict[str, Any]) -> str:
     return f"表情 {item['id']}：{item.get('caption','')}\n语气：{item.get('tone','')}\n标签：{'、'.join(item.get('tags', []))}"
 
-
 def _sticker_url(item: dict[str, Any]) -> str:
-    """Return a stable public CDN URL for the sticker stored in GitHub."""
     return f"{STICKER_CDN_BASE}/{item['file']}"
-
 
 mcp = FastMCP(
     "Salt Stickers",
@@ -122,6 +112,30 @@ mcp = FastMCP(
     port=int(os.environ.get("PORT", "8000")),
 )
 
+# --- Minimal MCP App UI experiment ---
+# Keep this isolated until one fixed sticker renders successfully.
+try:
+    from mcp.types import EmbeddedResource, TextResourceContents
+except ImportError:
+    EmbeddedResource = TextResourceContents = None
+
+WIDGET_URI = "ui://widget/sticker.html"
+
+if hasattr(mcp, "resource"):
+    @mcp.resource(WIDGET_URI)
+    def sticker_widget() -> str:
+        return (ROOT / "sticker-widget.html").read_text(encoding="utf-8")
+
+@mcp.tool()
+def show_test_sticker() -> dict[str, Any]:
+    """测试 MCP App UI：固定显示 015。仅用于确认 UI 图片链路。"""
+    item = _by_id()["015"]
+    # Apps-capable clients read structuredContent; older clients still get a useful URL.
+    return {
+        "content": [],
+        "structuredContent": {"imageUrl": _sticker_url(item)},
+        "_meta": {"openai/outputTemplate": WIDGET_URI},
+    }
 
 @mcp.tool()
 def search_stickers(intent: str, limit: int = 5) -> str:
@@ -129,13 +143,11 @@ def search_stickers(intent: str, limit: int = 5) -> str:
     payload = [{"id": x["id"], "caption": x.get("caption", ""), "tone": x.get("tone", ""), "tags": x.get("tags", [])} for x in _rank(intent, limit)]
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
-
 @mcp.tool()
 def pick_sticker(intent: str) -> str:
     """根据自然语言语气挑一张最合适的表情，并返回公开图片 URL。"""
     item = _rank(intent, 1)[0]
     return f"{_text_summary(item)}\n图片URL：{_sticker_url(item)}"
-
 
 @mcp.tool()
 def send_sticker(sticker_id: str) -> str:
@@ -147,11 +159,6 @@ def send_sticker(sticker_id: str) -> str:
         return f"没有表情 {sid}。有效 ID：{', '.join(sorted(by_id))}"
     return f"{_text_summary(item)}\n图片URL：{_sticker_url(item)}"
 
-
-# One public Render port serves BOTH:
-#   /mcp        -> Streamable HTTP MCP
-#   /admin      -> sticker manager
-#   /stickers/* -> admin previews
 starlette_app = mcp.streamable_http_app()
 starlette_app.mount("/", WSGIMiddleware(admin_app))
 
