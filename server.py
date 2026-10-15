@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -8,9 +9,10 @@ from typing import Any
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ImageContent, TextContent
 from starlette.middleware.wsgi import WSGIMiddleware
 
-from admin import app as admin_app
+from admin import app as admin_app, save_meta, set_description, set_tags
 
 ROOT = Path(__file__).resolve().parent
 STICKER_DIR = ROOT / "stickers"
@@ -139,6 +141,46 @@ def pick_sticker(intent: str) -> str:
     """根据自然语言语气挑一张最合适的表情，并返回公开图片 URL。"""
     item = _rank(intent, 1)[0]
     return f"{_text_summary(item)}\n图片URL：{_sticker_url(item)}"
+
+
+
+@mcp.tool()
+def review_pending_sticker(sticker_id: str = "") -> list[TextContent | ImageContent]:
+    """读取一张待识别的新表情图片。留空 ID 时自动取最早的一张待识别表情。用于观察图片后填写描述和标签。"""
+    pending = [x for x in _load() if x.get("pending_review")]
+    if sticker_id:
+        sid = str(sticker_id).strip().zfill(3)
+        pending = [x for x in pending if str(x.get("id", "")).zfill(3) == sid]
+    if not pending:
+        return [TextContent(type="text", text="没有待识别的表情。")]
+    item = pending[0]
+    sid = str(item["id"]).zfill(3)
+    path = STICKER_DIR / item["file"]
+    if not path.exists():
+        return [TextContent(type="text", text=f"表情 {sid} 的图片文件不存在。")]
+    ext = path.suffix.lower()
+    mime = {".png":"image/png",".gif":"image/gif",".webp":"image/webp"}.get(ext, "image/jpeg")
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return [
+        TextContent(type="text", text=f"待识别表情 ID：{sid}。请观察图片内容、文字、情绪和适用聊天语境。"),
+        ImageContent(type="image", data=data, mimeType=mime),
+    ]
+
+
+@mcp.tool()
+def annotate_sticker(sticker_id: str, description: str, tags: str) -> str:
+    """给新表情写入识别结果。description 写图片内容/语气/适用场景；tags 用逗号分隔。写入后会取消待识别状态。"""
+    sid = str(sticker_id).strip().zfill(3)
+    meta = _load()
+    item = next((x for x in meta if str(x.get("id", "")).zfill(3) == sid), None)
+    if not item:
+        return f"没有表情 {sid}。"
+    set_description(item, description.strip())
+    set_tags(item, tags)
+    item["caption"] = description.strip()[:40]
+    item.pop("pending_review", None)
+    ok, msg = save_meta(meta, f"Annotate sticker {sid}")
+    return msg if ok else msg
 
 
 @mcp.resource(WIDGET_URI, mime_type=APP_MIME)
