@@ -8,22 +8,21 @@ import re
 from pathlib import Path
 from typing import Any
 
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
+from starlette.middleware.wsgi import WSGIMiddleware
+
+from admin import app as admin_app
 
 ROOT = Path(__file__).resolve().parent
 STICKER_DIR = ROOT / "stickers"
 METADATA_PATH = ROOT / "metadata.json"
 
-with METADATA_PATH.open("r", encoding="utf-8") as f:
-    STICKERS: list[dict[str, Any]] = json.load(f)
-
-BY_ID = {item["id"]: item for item in STICKERS}
-
-# A tiny synonym layer helps natural Chinese requests land on the intended abstract sticker.
 SYNONYMS = {
-    "无语": ["没招", "雷人", "听不懂", "问号", "没办法"],
+    "无语": ["没招", "雷人", "听不懂", "问号", "没办法", "流汗"],
     "生气": ["可恶", "恼火", "不爽", "奶凶"],
+    "害怕": ["好可怕", "惊恐", "吓到", "弱小无助"],
     "困": ["睡觉", "水饺", "晚安", "犯困"],
     "想念": ["想你", "黏人", "撒娇"],
     "想你": ["想念", "黏人", "撒娇"],
@@ -39,17 +38,25 @@ SYNONYMS = {
 }
 
 
+def _load() -> list[dict[str, Any]]:
+    with METADATA_PATH.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _by_id() -> dict[str, dict[str, Any]]:
+    return {str(x["id"]).zfill(3): x for x in _load()}
+
+
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", "", text.lower())
+    return re.sub(r"\s+", "", (text or "").lower())
 
 
 def _expanded_terms(query: str) -> set[str]:
     q = _norm(query)
     terms = {q}
-    # Add Chinese chunks so longer natural-language requests still match short tags.
     for n in (2, 3, 4):
         for i in range(max(0, len(q) - n + 1)):
-            terms.add(q[i:i+n])
+            terms.add(q[i:i + n])
     for key, values in SYNONYMS.items():
         if key in q or any(v in q for v in values):
             terms.add(key)
@@ -60,14 +67,11 @@ def _expanded_terms(query: str) -> set[str]:
 def _score(item: dict[str, Any], query: str) -> float:
     q = _norm(query)
     terms = _expanded_terms(query)
-    caption = _norm(item["caption"])
+    caption = _norm(item.get("caption", ""))
     tags = [_norm(x) for x in item.get("tags", [])]
     tone = _norm(item.get("tone", ""))
     haystack = "|".join([caption, *tags, tone])
-
-    score = 0.0
-    if q and q in haystack:
-        score += 12.0
+    score = 12.0 if q and q in haystack else 0.0
     for term in terms:
         if len(term) < 2:
             continue
@@ -83,27 +87,19 @@ def _score(item: dict[str, Any], query: str) -> float:
 
 
 def _rank(query: str, limit: int = 5) -> list[dict[str, Any]]:
+    stickers = _load()
+    by_id = {str(x["id"]).zfill(3): x for x in stickers}
     limit = max(1, min(int(limit), 10))
-    ranked = sorted(
-        ((item, _score(item, query)) for item in STICKERS),
-        key=lambda pair: (pair[1], pair[0]["id"]),
-        reverse=True,
-    )
-    positives = [item for item, score in ranked if score > 0]
-    # If the request is intentionally abstract and has no lexical match, give the
-    # model a small varied fallback set instead of failing.
+    ranked = sorted(((x, _score(x, query)) for x in stickers), key=lambda p: (p[1], p[0]["id"]), reverse=True)
+    positives = [x for x, score in ranked if score > 0]
     if not positives:
-        fallback_ids = ["015", "024", "011", "026", "004", "007"]
-        positives = [BY_ID[x] for x in fallback_ids]
+        fallback = ["015", "024", "011", "026", "004", "007"]
+        positives = [by_id[x] for x in fallback if x in by_id]
     return positives[:limit]
 
 
 def _text_summary(item: dict[str, Any]) -> str:
-    return (
-        f"表情 {item['id']}：{item['caption']}\n"
-        f"语气：{item['tone']}\n"
-        f"标签：{'、'.join(item['tags'])}"
-    )
+    return f"表情 {item['id']}：{item.get('caption','')}\n语气：{item.get('tone','')}\n标签：{'、'.join(item.get('tags', []))}"
 
 
 def _image_content(item: dict[str, Any]) -> ImageContent:
@@ -127,53 +123,35 @@ mcp = FastMCP(
 
 @mcp.tool()
 def search_stickers(intent: str, limit: int = 5) -> str:
-    """按自然语言语气/场景搜索表情包。
-
-    intent 可以很抽象，例如：“被她一句话雷得说不出话，但别太凶”、
-    “欠欠地说我不服”、“困了准备撤”、“突然很黏人想她”。
-    返回候选 ID、文字和语气说明；需要真正发图时再调用 send_sticker。
-    """
-    results = _rank(intent, limit)
-    payload = [
-        {
-            "id": x["id"],
-            "caption": x["caption"],
-            "tone": x["tone"],
-            "tags": x["tags"],
-        }
-        for x in results
-    ]
+    """按自然语言语气/场景搜索表情包。"""
+    payload = [{"id": x["id"], "caption": x.get("caption", ""), "tone": x.get("tone", ""), "tags": x.get("tags", [])} for x in _rank(intent, limit)]
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def pick_sticker(intent: str) -> list[TextContent | ImageContent]:
-    """根据自然语言语气直接挑一张最合适的表情并返回图片。
-
-    适合 ChatGPT 自己判断“这里该丢哪张图”的场景。若需要人工指定，使用 send_sticker。
-    """
+    """根据自然语言语气直接挑一张最合适的表情并返回图片。"""
     item = _rank(intent, 1)[0]
-    return [
-        TextContent(type="text", text=_text_summary(item)),
-        _image_content(item),
-    ]
+    return [TextContent(type="text", text=_text_summary(item)), _image_content(item)]
 
 
 @mcp.tool()
 def send_sticker(sticker_id: str) -> list[TextContent | ImageContent]:
     """按三位 ID 返回指定表情图片，例如 015、020、027。"""
     sid = str(sticker_id).strip().zfill(3)
-    item = BY_ID.get(sid)
+    by_id = _by_id()
+    item = by_id.get(sid)
     if not item:
-        valid = ", ".join(sorted(BY_ID))
-        return [TextContent(type="text", text=f"没有表情 {sid}。有效 ID：{valid}")]
-    return [
-        TextContent(type="text", text=_text_summary(item)),
-        _image_content(item),
-    ]
+        return [TextContent(type="text", text=f"没有表情 {sid}。有效 ID：{', '.join(sorted(by_id))}")]
+    return [TextContent(type="text", text=_text_summary(item)), _image_content(item)]
 
+
+# One public Render port serves BOTH:
+#   /mcp        -> Streamable HTTP MCP
+#   /admin      -> sticker manager
+#   /stickers/* -> admin previews
+starlette_app = mcp.streamable_http_app()
+starlette_app.mount("/", WSGIMiddleware(admin_app))
 
 if __name__ == "__main__":
-    # Streamable HTTP is the transport expected by modern remote MCP clients.
-    # FastMCP serves it on /mcp by default.
-    mcp.run(transport="streamable-http")
+    uvicorn.run(starlette_app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
