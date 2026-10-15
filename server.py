@@ -113,28 +113,48 @@ mcp = FastMCP(
 )
 
 # --- Minimal MCP App UI experiment ---
-# Keep this isolated until one fixed sticker renders successfully.
-try:
-    from mcp.types import EmbeddedResource, TextResourceContents
-except ImportError:
-    EmbeddedResource = TextResourceContents = None
+# One fixed sticker first. Do not add dynamic selection until this renders.
+APP_MIME = "text/html;profile=mcp-app"
+WIDGET_URI = "ui://salt-stickers/test-v1.html"
 
-WIDGET_URI = "ui://widget/sticker.html"
-
-if hasattr(mcp, "resource"):
-    @mcp.resource(WIDGET_URI)
-    def sticker_widget() -> str:
-        return (ROOT / "sticker-widget.html").read_text(encoding="utf-8")
-
-@mcp.tool()
-def show_test_sticker() -> dict[str, Any]:
-    """测试 MCP App UI：固定显示 015。仅用于确认 UI 图片链路。"""
-    item = _by_id()["015"]
-    # Apps-capable clients read structuredContent; older clients still get a useful URL.
+@mcp.resource(WIDGET_URI, mime_type=APP_MIME)
+def sticker_widget() -> dict[str, Any]:
+    html = (ROOT / "sticker-widget.html").read_text(encoding="utf-8")
     return {
-        "content": [],
+        "contents": [{
+            "uri": WIDGET_URI,
+            "mimeType": APP_MIME,
+            "text": html,
+            "_meta": {
+                "ui": {
+                    "prefersBorder": False,
+                    "csp": {
+                        "connectDomains": [],
+                        "resourceDomains": ["https://cdn.jsdelivr.net"],
+                        "frameDomains": [],
+                    },
+                },
+                "openai/widgetDescription": "Displays one sticker image.",
+            },
+        }]
+    }
+
+@mcp.tool(
+    name="show_test_sticker",
+    description="Use this only to test whether the fixed sticker UI renders in ChatGPT.",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+    meta={
+        "ui": {"resourceUri": WIDGET_URI},
+        "openai/outputTemplate": WIDGET_URI,
+        "openai/visibility": ["model", "app"],
+    },
+)
+def show_test_sticker() -> dict[str, Any]:
+    """固定显示 015，仅用于确认 MCP App UI 图片链路。"""
+    item = _by_id()["015"]
+    return {
         "structuredContent": {"imageUrl": _sticker_url(item)},
-        "_meta": {"openai/outputTemplate": WIDGET_URI},
+        "content": [{"type": "text", "text": "Displaying the fixed test sticker."}],
     }
 
 @mcp.tool()
