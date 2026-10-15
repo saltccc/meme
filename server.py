@@ -115,7 +115,7 @@ mcp = FastMCP(
 # --- Minimal MCP App UI experiment ---
 # One fixed sticker first. Do not add dynamic selection until this renders.
 APP_MIME = "text/html;profile=mcp-app"
-WIDGET_URI = "ui://salt-stickers/test-v2.html"
+WIDGET_URI = "ui://salt-stickers/sticker-v1.html"
 
 @mcp.resource(WIDGET_URI, mime_type=APP_MIME)
 def sticker_widget() -> str:
