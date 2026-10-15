@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+html,body{margin:0;padding:0;background:transparent;overflow:hidden}
+img{display:block;width:auto;height:auto;max-width:100%;max-height:180px}
+</style>
+</head>
+<body>
+<img id="sticker" alt="">
+<script>
+const img=document.getElementById("sticker");
+function render(){
+  const out=window.openai && window.openai.toolOutput;
+  if(out && out.imageUrl) img.src=out.imageUrl;
+}
+render();
+window.addEventListener("openai:set_globals",render);
+</script>
+</body>
+</html>
